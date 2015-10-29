@@ -16,7 +16,7 @@
 
 
 /****************************************************************************
- * stub replacement for Messaging Architects' internal Xpl library
+ * stub replacement for netmail's internal Xpl library
  ****************************************************************************/
 #include <stdarg.h>
 #include <stdio.h>
@@ -29,11 +29,19 @@
 #define XPL_H
 
 
-#ifdef WINDOWS
+#ifdef _WIN32
 # define		WIN_CDECL		__cdecl
 # define		WIN_STDCALL		__stdcall
-# define		EXPORT			__declspec(dllexport)
-# define		IMPORT			__declspec(dllimport)
+# ifndef COMPILE_AS_STATIC
+#  define		EXPORT			__declspec(dllexport)
+#  define		IMPORT			__declspec(dllimport)
+# else
+#  define		EXPORT
+#  define		IMPORT
+# endif
+# ifndef va_copy
+#		define va_copy(d,s) ((d) = (s))
+# endif
 # define		INLINE			__inline
 #else
 # define		WIN_CDECL
@@ -41,6 +49,10 @@
 # define		EXPORT
 # define		IMPORT
 # define		INLINE			__inline
+
+# include <sys/types.h>
+# include <sys/socket.h>
+# include <netdb.h>
 #endif
 
 
@@ -202,6 +214,7 @@ EXPORT char *_skipspace( char *source, const char *breakchars );
 #define skipspace(s) _skipspace((s), "\r\n")
 EXPORT char *chopspace( char *value );
 
+EXPORT size_t vstrcatf( char *buffer, size_t bufferSize, size_t *sizeNeeded, const char *format, va_list args );
 EXPORT size_t strprintf( char *buffer, size_t bufferSize, size_t *sizeNeeded, const char *format, ... ) XplFormatString(4, 5);
 EXPORT int stripat(char *str, char *pattern);
 EXPORT int stripatn(char *str, char *pattern, size_t len);

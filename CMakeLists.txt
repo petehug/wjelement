@@ -3,6 +3,19 @@ cmake_minimum_required(VERSION 2.6)
 include(CheckIncludeFiles)
 include(CheckSymbolExists)
 
+option(STATIC_LIB "Compile as static libraries" OFF)
+
+if(STATIC_LIB)
+  set(BUILD_SHARED_LIBS OFF)
+  add_definitions(-DCOMPILE_AS_STATIC)
+else(STATIC_LIB)
+  set(BUILD_SHARED_LIBS ON)
+endif(STATIC_LIB)
+
+if("${CMAKE_SYSTEM}" MATCHES "Linux")
+  add_definitions(-D_GNU_SOURCE)
+endif()
+
 if(NOT CMAKE_INSTALL_PREFIX)
   set(CMAKE_INSTALL_PREFIX /usr/local)
 endif(NOT CMAKE_INSTALL_PREFIX)
@@ -33,11 +46,11 @@ if(HAVE_REGEX_H)
 	add_definitions(-DHAVE_REGEX_H)
 else(HAVE_REGEX_H)
 	message("***  WARNING: GNU C regex library not found.")
-	message("     WJESchemaValidate() will not support patternProperties")
+	message("     WJESchemaValidate() will not support:")
+	message("         pattern")
+	message("         patternProperties")
+	message("         format")
 endif(HAVE_REGEX_H)
-
-set(OPENSSL_LIBS ssl crypto)
-set(PTHREAD_LIBS pthread)
 
 # use, i.e. don't skip the full RPATH for the build tree
 SET(CMAKE_SKIP_BUILD_RPATH  FALSE)
@@ -45,7 +58,7 @@ SET(CMAKE_SKIP_BUILD_RPATH  FALSE)
 # (but later on when installing)
 SET(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
 # the RPATH to be used when installing
-SET(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
+SET(CMAKE_INSTALL_RPATH ${LIB_DEST_DIR})
 # add the automatically determined parts of the RPATH
 # which point to directories outside the build tree to the install RPATH
 SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
@@ -59,3 +72,33 @@ INSTALL(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/documentation/
 include_directories(include)
 add_subdirectory(src)
 add_subdirectory(include)
+
+# pkg-config .pc
+SET(PKG_CONFIG_REQUIRES glib-2.0)
+SET(PKG_CONFIG_LIBDIR
+    ${LIB_DEST_DIR}
+)
+SET(PKG_CONFIG_INCLUDEDIR
+	${INC_DEST_DIR}
+)
+SET(PKG_CONFIG_LIBS
+    "-L\${libdir} -lwjelement -lwjreader -lwjwriter"
+)
+SET(PKG_CONFIG_CFLAGS
+    "-I\${includedir}"
+)
+CONFIGURE_FILE(
+  "${CMAKE_CURRENT_SOURCE_DIR}/pkg-config.pc.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/wjelement.pc"
+)
+INSTALL(FILES "${CMAKE_BINARY_DIR}/wjelement.pc"
+        DESTINATION ${LIB_DEST_DIR}/pkgconfig)
+
+# uninstall target
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake_uninstall.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+    IMMEDIATE @ONLY)
+
+add_custom_target(uninstall
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)

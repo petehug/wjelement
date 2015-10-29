@@ -70,7 +70,8 @@ char *json = \
 "	'string': 'This is a single string',									\n"
 "	'sender':{																\n"
 "		'address':'foo@bar.com'												\n"
-"	}																		\n"
+"	},																		\n"
+"	'empty': null															\n"
 "}";
 
 typedef int (* wjetest)(WJElement doc);
@@ -512,6 +513,99 @@ static int OptionalsTest(WJElement doc)
 
 
 
+/* Test that default values are returned if property is missing */
+static int GetDefaultTest(WJElement doc)
+{
+	char	*v;
+
+	/* WJENumber */
+	if (-1 != WJENumber(doc, "absent",		WJE_GET, -1))	return(__LINE__);
+	if (0 != WJENumber(doc,	"absent",		WJE_GET, 0))	return(__LINE__);
+	if (1 != WJENumber(doc,	"absent",		WJE_GET, 1))	return(__LINE__);
+	if (-1 != WJENumber(doc, "empty",		WJE_GET, -1))	return(__LINE__);
+	if (0 != WJENumber(doc,	"empty",		WJE_GET, 0))	return(__LINE__);
+	if (1 != WJENumber(doc,	"empty",		WJE_GET, 1))	return(__LINE__);
+
+	/* WJEDouble */
+	if (-1.0 != WJEDouble(doc, "absent",	WJE_GET, -1.0)) return(__LINE__);
+	if (0.0 != WJEDouble(doc, "absent",		WJE_GET, 0.0))	return(__LINE__);
+	if (1.0 != WJEDouble(doc, "absent",		WJE_GET, 1.0))	return(__LINE__);
+	if (-1.0 != WJEDouble(doc, "empty",		WJE_GET, -1.0)) return(__LINE__);
+	if (0.0 != WJEDouble(doc, "empty",		WJE_GET, 0.0))	return(__LINE__);
+	if (1.0 != WJEDouble(doc, "empty",		WJE_GET, 1.0))	return(__LINE__);
+
+	/* WJEBool */
+	if (1 != WJEBool(doc, "absent",			WJE_GET, 1))	return(__LINE__);
+	if (0 != WJEBool(doc, "absent",			WJE_GET, 0))	return(__LINE__);
+
+	/* NULL is treated as false */
+	if (0 != WJEBool(doc, "empty",			WJE_GET, 1))	return(__LINE__);
+	if (0 != WJEBool(doc, "empty",			WJE_GET, 0))	return(__LINE__);
+
+	/* WJEString */
+	if (!(v = WJEString(doc, "absent",		WJE_GET, "")) ||
+		strcmp(v, "") != 0)									return(__LINE__);
+
+	if (!(v = WJEString(doc, "absent",		WJE_GET, "foo")) ||
+		strcmp(v, "foo") != 0)								return(__LINE__);
+
+	if (NULL != WJEString(doc, "absent",	WJE_GET, NULL))	return(__LINE__);
+
+	if (!(v = WJEString(doc, "empty",		WJE_GET, "")) ||
+		strcmp(v, "") != 0)									return(__LINE__);
+
+	if (!(v = WJEString(doc, "empty",		WJE_GET, "foo")) ||
+		strcmp(v, "foo") != 0)								return(__LINE__);
+
+	if (NULL != WJEString(doc, "empty",	WJE_GET, NULL))		return(__LINE__);
+
+
+	/*
+		TODO:
+		- WJEInt32
+		- WJEUInt32
+		- WJEInt64
+		- WJEUInt64
+	*/
+
+	return(0);
+}
+
+/* Test the F functions */
+static int FormatStrTest(WJElement doc)
+{
+	char	*v;
+	int		i;
+	char	*longstr;
+
+	for (i = 0; i <= 9; i++) {
+		if (i != WJEInt32F(doc, WJE_GET, NULL, -1, "digits[%d]", i)) {
+			return(__LINE__);
+		}
+	}
+
+	if (!WJEBoolF(doc, WJE_GET, NULL, FALSE, "bools[%d]", 0))	return(__LINE__);
+	if ( WJEBoolF(doc, WJE_GET, NULL, FALSE, "bools[%d]", 1))	return(__LINE__);
+
+	/*
+		Test with a VERY long result that should go over the default buffer size
+		of 1024.
+	*/
+	longstr = MemMallocWait(2048);
+	memset(longstr, ' ', 2048);
+	longstr[2048 - 1] = '\0';
+
+	if (!WJEBoolF(doc, WJE_GET, NULL, FALSE, "bools[%d]%s", 0, longstr)) {
+		MemRelease(&longstr);
+		return(__LINE__);
+	}
+	MemRelease(&longstr);
+
+	return(0);
+}
+
+
+
 /*
 	----------------------------------------------------------------------------
 	End of tests
@@ -538,6 +632,8 @@ struct {
 	{ "append",		AppendTest		},
 	{ "conditions",	ConditionsTest	},
 	{ "optionals",	OptionalsTest	},
+	{ "defaults",	GetDefaultTest	},
+	{ "formatstr",	FormatStrTest	},
 
 	/*
 		TODO: Write the following tests
@@ -580,23 +676,7 @@ int main(int argc, char **argv)
 			fprintf(stderr, "Ignoring unknown test \"%s\"\n", argv[a]);
 		} else {
 			/* Reopen the JSON for each test in case a test modified it */
-			if ((j = MemStrdup(json))) {
-				/* Correct the quotes */
-				for (x = j; *x; x++) {
-					if (*x == '\'') *x = '"';
-				}
-
-				// printf("JSON:\n%s\n", j);
-				if ((reader = WJROpenMemDocument(j, NULL, 0))) {
-					doc = WJEOpenDocument(reader, NULL, NULL, NULL);
-
-					WJRCloseDocument(reader);
-				}
-
-				MemRelease(&j);
-			}
-
-			if (!doc) {
+			if (!(doc = _WJEParse(json, '\''))) {
 				fprintf(stderr, "error: Could not parse JSON document\n");
 				MemoryManagerClose("wjeunit");
 				return(1);

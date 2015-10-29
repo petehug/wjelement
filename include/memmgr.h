@@ -25,7 +25,13 @@
 #include "xpl.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
+#ifndef asprintf
+	int asprintf(char **strp, const char *fmt, ...);
+#else
+#define HAS_ASPRINTF
+#endif
 
 #define MemAssert(p)
 

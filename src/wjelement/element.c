@@ -80,10 +80,13 @@ _WJElement * _WJENew(_WJElement *parent, char *name, size_t len, const char *fil
 
 _WJElement * _WJEReset(_WJElement *e, WJRType type)
 {
+	WJElement	child;
+
 	if (!e) return(NULL);
 
-	while (e->pub.child) {
-		WJECloseDocument(e->pub.child);
+	while ((child = e->pub.child)) {
+		WJEDetach(child);
+		WJECloseDocument(child);
 	}
 
 	if (WJR_TYPE_STRING == e->pub.type && e->value.string) {
@@ -139,6 +142,7 @@ EXPORT XplBool WJEAttach(WJElement container, WJElement document)
 
 	if (document->name) {
 		while ((prev = WJEChild(container, document->name, WJE_GET))) {
+			WJEDetach(prev);
 			WJECloseDocument(prev);
 		}
 	}
@@ -272,10 +276,17 @@ static WJElement _WJELoad(_WJElement *parent, WJReader reader, char *where, WJEL
 				break;
 
 			case WJR_TYPE_NUMBER:
+#ifdef WJE_DISTINGUISH_INTEGER_TYPE
+			case WJR_TYPE_INTEGER:
+#endif
 				l->value.number.hasDecimalPoint = WJRIntOrDouble(reader,
 								&l->value.number.i,
 								&l->value.number.d);
 
+				if (l->value.number.hasDecimalPoint)
+					l->pub.type = WJR_TYPE_NUMBER;
+				else
+					l->pub.type = WJR_TYPE_INTEGER;
 
 				if (WJRNegative(reader)) {
 					/*
@@ -300,6 +311,91 @@ static WJElement _WJELoad(_WJElement *parent, WJReader reader, char *where, WJEL
 	}
 
 	return((WJElement) l);
+}
+
+typedef struct WJEMemArgs
+{
+	char		*json;
+	char		quote;
+
+	size_t		len;
+} WJEMemArgs;
+
+EXPORT size_t WJEMemCallback(char *buffer, size_t length, size_t seen, void *userdata)
+{
+	WJEMemArgs	*args	= (WJEMemArgs *) userdata;
+	char		*json;
+	char		*q;
+	size_t		len;
+
+	if (!args || !args->json) {
+		return(0);
+	}
+
+	len		= args->len - seen;
+	json	= args->json + seen;
+
+	if (!len) {
+		/* Done */
+		return(0);
+	}
+
+	if (len > length) {
+		len = length;
+	}
+
+	if (len > 0) {
+		memcpy(buffer, json, len);
+
+		switch (args->quote) {
+			case '"':
+			case '\0':
+				/* Default behavior, do nothing to quotes */
+				break;
+
+			default:
+				/* Replace quotes in the data we just copied */
+				json	= buffer;
+				length	= len;
+
+				while (length && (q = memchr(json, args->quote, length))) {
+					*q = '"';
+
+					length -= (q - json);
+					json = q;
+				}
+
+				break;
+		}
+	}
+	return(len);
+}
+
+/*
+	Parse a JSON document already in memory directoy without requiring the
+	consumer to create a WJReader. This is meant as a simple utility function
+	and allows parsing documents with a non standard quote char for the sake of
+	embedding documents directly in C code.
+*/
+EXPORT WJElement _WJEParse(const char *json, char quote)
+{
+	WJElement		doc;
+	WJEMemArgs		args;
+	WJReader		reader;
+
+	args.json	= (char *) json;
+	args.quote	= quote;
+
+	if (json) {
+		args.len = strlen(json);
+	}
+
+	if (json && (reader = WJROpenDocument(WJEMemCallback, &args, NULL, 0))) {
+		doc = WJEOpenDocument(reader, NULL, NULL, NULL);
+		WJRCloseDocument(reader);
+	}
+
+	return(doc);
 }
 
 EXPORT WJElement _WJEOpenDocument(WJReader reader, char *where, WJELoadCB loadcb, void *data, const char *file, const int line)
@@ -354,10 +450,19 @@ static WJElement _WJECopy(_WJElement *parent, WJElement original, WJECopyCB copy
 				break;
 
 			case WJR_TYPE_NUMBER:
+#ifdef WJE_DISTINGUISH_INTEGER_TYPE
+			case WJR_TYPE_INTEGER:
+#endif
 				l->value.number.negative		= o->value.number.negative;
 				l->value.number.i				= o->value.number.i;
 				l->value.number.d				= o->value.number.d;
 				l->value.number.hasDecimalPoint	= o->value.number.hasDecimalPoint;
+
+				if (l->value.number.hasDecimalPoint)
+					l->pub.type = WJR_TYPE_NUMBER;
+				else
+					l->pub.type = WJR_TYPE_INTEGER;
+
 				break;
 
 			case WJR_TYPE_TRUE:
@@ -458,7 +563,7 @@ EXPORT XplBool _WJEWriteDocument(WJElement document, WJWriter writer, char *name
 
 				child = current->pub.child;
 				do {
-					_WJEWriteDocument(child, writer, child ? child->name : NULL,
+					_WJEWriteDocument(child, writer, NULL,
 						precb, postcb, data);
 				} while (child && (child = child->next));
 
@@ -470,17 +575,22 @@ EXPORT XplBool _WJEWriteDocument(WJElement document, WJWriter writer, char *name
 				break;
 
 			case WJR_TYPE_NUMBER:
+#ifdef WJE_DISTINGUISH_INTEGER_TYPE
+			case WJR_TYPE_INTEGER:
+#endif
 				if (current->value.number.hasDecimalPoint) {
+					current->pub.type = WJR_TYPE_NUMBER;
 					if (!current->value.number.negative) {
 						WJWDouble(name, current->value.number.d, writer);
 					} else {
 						WJWDouble(name, -current->value.number.d, writer);
 					}
 				} else {
+					current->pub.type = WJR_TYPE_INTEGER;
 					if (!current->value.number.negative) {
 						WJWUInt64(name, current->value.number.i, writer);
 					} else {
-						WJWInt64(name, -current->value.number.i, writer);
+						WJWInt64(name, -((int64) current->value.number.i), writer);
 					}
 				}
 				break;
@@ -503,10 +613,13 @@ EXPORT XplBool _WJEWriteDocument(WJElement document, WJWriter writer, char *name
 EXPORT XplBool WJECloseDocument(WJElement document)
 {
 	_WJElement	*current = (_WJElement *) document;
+	WJElement	child;
 
 	if (!document) {
 		return(FALSE);
 	}
+
+	WJEDetach(document);
 
 	if (document->freecb && !document->freecb(document)) {
 		/* The callback has prevented free'ing the document */
@@ -533,8 +646,9 @@ EXPORT XplBool WJECloseDocument(WJElement document)
 
 
 	/* Destroy all children */
-	while (document->child) {
-		WJECloseDocument(document->child);
+	while ((child = document->child)) {
+		WJEDetach(child);
+		WJECloseDocument(child);
 	}
 
 	if (current->pub.type == WJR_TYPE_STRING) {
@@ -553,11 +667,61 @@ EXPORT XplBool WJECloseDocument(WJElement document)
 
 EXPORT void WJEDump(WJElement document)
 {
+    WJEWriteFILE(document, stdout);
+}
+
+EXPORT void WJEWriteFILE(WJElement document, FILE* fd)
+{
 	WJWriter		dumpWriter;
 
-	if ((dumpWriter = WJWOpenFILEDocument(TRUE, stdout))) {
+	if ((dumpWriter = WJWOpenFILEDocument(TRUE, fd))) {
 		WJEWriteDocument(document, dumpWriter, NULL);
 		WJWCloseDocument(dumpWriter);
 	}
-	fprintf(stdout, "\n");
+	fprintf(fd, "\n");
+}
+
+typedef struct _MemWriterData {
+	size_t maxlength;
+	size_t length;
+	char *buffer;
+} _MemWriterData;
+static size_t MemWriteCB(char *data, size_t size, void *writedata) {
+	size_t write;
+	_MemWriterData *w = (_MemWriterData *)writedata;
+	if(w->maxlength) {
+		write = w->maxlength - strlen(w->buffer) - 1;
+	} else {
+		if(size > w->length - strlen(w->buffer)) {
+			w->length += 4096;
+			w->buffer = MemReallocWait(w->buffer, w->length);
+		}
+		write = size;
+	}
+	if(size < write) {
+		write = size;
+	}
+	if(w->buffer) {
+		strncat(w->buffer, data, write);
+	}
+	return size;
+}
+
+EXPORT char * WJEWriteMEM(WJElement document, XplBool pretty, size_t maxlength)
+{
+	WJWriter memWriter;
+	_MemWriterData data;
+
+	data.length = 0;
+	data.maxlength = maxlength;
+	data.buffer = MemMalloc(maxlength);
+	if(data.buffer) {
+		*data.buffer = '\0';
+	}
+
+	if ((memWriter = _WJWOpenDocument(pretty, MemWriteCB, &data, maxlength))) {
+		WJEWriteDocument(document, memWriter, NULL);
+		WJWCloseDocument(memWriter);
+	}
+	return MemRealloc(data.buffer, strlen(data.buffer));
 }

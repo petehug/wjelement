@@ -76,8 +76,12 @@ static void ListSelectors(char *prefix, WJElement schema, WJElement document,
 		/* swap in any $ref'erenced schema */
 		if((str = WJEString(schema, "[\"$ref\"]", WJE_GET, NULL))) {
 			if ((last = loadcb(str, client, __FILE__, __LINE__))) {
-				if(schema && freecb && !schemaGiven) {
-					freecb(schema, client);
+				if(schema && !schemaGiven) {
+					if(freecb) {
+						freecb(schema, client);
+					} else {
+						WJECloseDocument(schema);
+					}
 					schema = NULL;
 				}
 
@@ -97,8 +101,12 @@ static void ListSelectors(char *prefix, WJElement schema, WJElement document,
 				ListSelectors(prefix, subSchema, document, type, format,
 							  loadcb, freecb, matchcb, client, exist);
 			}
-			if(subSchema && freecb) {
-				freecb(subSchema, client);
+			if(subSchema) {
+				if(freecb) {
+					freecb(subSchema, client);
+				} else {
+					WJECloseDocument(subSchema);
+				}
 				subSchema = NULL;
 			}
 		}
@@ -119,8 +127,12 @@ static void ListSelectors(char *prefix, WJElement schema, WJElement document,
 					ListSelectors(prefix, subSchema, document, type, format,
 								  loadcb, freecb, matchcb, client, exist);
 				}
-				if(subSchema && freecb) {
-					freecb(subSchema, client);
+				if(subSchema) {
+					if(freecb) {
+						freecb(subSchema, client);
+					} else {
+						WJECloseDocument(subSchema);
+					}
 					subSchema = NULL;
 				}
 			}
@@ -256,8 +268,12 @@ static void ListSelectors(char *prefix, WJElement schema, WJElement document,
 
 	}
 
-	if(schema && freecb && !schemaGiven) {
-		freecb(schema, client);
+	if(schema && !schemaGiven) {
+		if(freecb) {
+			freecb(schema, client);
+		} else {
+			WJECloseDocument(schema);
+		}
 		schema = NULL;
 	}
 }
@@ -365,7 +381,7 @@ static double Modulus(double a, double b) {
 static XplBool SchemaValidate(WJElement schema, WJElement document,
 							  WJEErrCB err, WJESchemaLoadCB loadcb,
 							  WJESchemaFreeCB freecb, void *client,
-							  char *name) {
+							  char *name, int version) {
 	WJElement memb = NULL;
 	WJElement sub = NULL;
 	WJElement arr = NULL;
@@ -394,15 +410,62 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 		}
 	}
 	if(schema) {
-		/* swap in any $ref'erenced schema */
-		if(loadcb && (str = WJEString(schema, "[\"$ref\"]", WJE_GET, NULL))) {
-			sub = loadcb(str, client, __FILE__, __LINE__);
-			fail = SchemaValidate(sub, document, err, loadcb, freecb, client,
-								  name);
-			if(freecb) {
-				freecb(sub, client);
+		/* determine json-schema version */
+		/*
+		  NOTE:
+		  Draft 4 is barely supported, mostly where it overlaps with draft 3.
+		  Draft 4 patches are most welcome!  See how "required" is handled
+		  for an example of handling validation for different spec versions.
+		 */
+		if((str = WJEString(schema, "[\"$schema\"]", WJE_GET, NULL))) {
+			if(strstr(str, "://json-schema.org/draft-03/")) {
+				version = 3;
+			} else if(strstr(str, "://json-schema.org/draft-04/")) {
+				version = 4;
 			}
-			WJECloseDocument(sub);
+		}
+
+		/* swap in any $ref'erenced schema */
+		if(str = WJEString(schema, "[\"$ref\"]", WJE_GET, NULL)) {
+
+			// Johan: Add Inline dereferencing. Looking for definitions
+			const char* inline_dereferencing = "#/definitions/";
+			if (strncmp (inline_dereferencing, str,
+						 strlen (inline_dereferencing)) == 0) {
+				WJElement schema_definitions, schema_root = schema->parent;
+				while (schema_root->parent) {
+					schema_root = schema_root->parent;
+				}
+
+				schema_definitions = WJEObject(schema_root,
+														 "definitions",
+														 WJE_GET);
+				if (schema_definitions) {
+					char *ptr = strrchr (str, '/');
+					if (ptr) {
+						++ptr;
+						sub = WJEObject(schema_definitions, ptr, WJE_GET);
+						if (sub) {
+							fail = SchemaValidate (sub, document, err,
+												   loadcb, freecb,
+												   client, name, version);
+							return fail;
+						}
+					}
+				}
+			}
+
+			if (loadcb) {
+				sub = loadcb (str, client, __FILE__, __LINE__);
+				fail = SchemaValidate (sub, document, err, loadcb, freecb,
+									   client, name, version);
+				if (freecb) {
+					freecb (sub, client);
+				}
+				else {
+					WJECloseDocument (sub);
+				}
+			}
 			return fail;
 		}
 
@@ -410,16 +473,21 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 		if((sub = WJEObject(schema, "extends", WJE_GET))) {
 			/* inline schema object */
 			anyFail = anyFail || !SchemaValidate(sub, document, err, loadcb,
-												 freecb, client, name);
+												 freecb, client, name, version);
 		} else if(loadcb &&
 				  (str = WJEString(schema, "extends", WJE_GET, NULL))) {
 			/* string reference (MA extension of v3 spec) */
 			if((sub = loadcb(str, client, __FILE__, __LINE__))) {
 				anyFail = anyFail || !SchemaValidate(sub, document, err, loadcb,
-													 freecb, client, name);
+													 freecb, client, name,
+													 version);
 			}
-			if(sub && freecb) {
-				freecb(sub, client);
+			if(sub) {
+				if(freecb) {
+					freecb(sub, client);
+				} else {
+					WJECloseDocument(sub);
+				}
 				sub = NULL;
 			}
 		}
@@ -428,7 +496,8 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 			last = NULL;
 			while((sub = _WJEObject(schema, "extends[]", WJE_GET, &last))) {
 				anyFail = anyFail || !SchemaValidate(sub, document, err, loadcb,
-													 freecb, client, name);
+													 freecb, client, name,
+													 version);
 			}
 
 			/* string reference (MA extension of v3 spec) */
@@ -438,10 +507,14 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 				if((sub = loadcb(str, client, __FILE__, __LINE__))) {
 					anyFail = anyFail || !SchemaValidate(sub, document, err,
 														 loadcb, freecb,
-														client, name);
+														 client, name, version);
 				}
-				if(sub && freecb) {
-					freecb(sub, client);
+				if(sub) {
+					if(freecb) {
+						freecb(sub, client);
+					} else {
+						WJECloseDocument(sub);
+					}
 					sub = NULL;
 				}
 			}
@@ -472,8 +545,8 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 							fail = FALSE;
 						}
 					} else if(arr->type == WJR_TYPE_OBJECT) {
-						if(SchemaValidate(arr, document, err,
-										  loadcb, freecb, client, name)) {
+						if(SchemaValidate(arr, document, err, loadcb, freecb,
+										  client, name, version)) {
 							fail = FALSE;
 						}
 					}
@@ -486,7 +559,7 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 			} else if(memb->type == WJR_TYPE_OBJECT) {
 				/* spec isn't clear here, but we do it for arrays, so... */
 				if(!SchemaValidate(memb, document, err,
-								   loadcb, freecb, client, name)) {
+								   loadcb, freecb, client, name, version)) {
 					fail = TRUE;
 				}
 			}
@@ -522,7 +595,7 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 				while((arr = WJEGet(memb, "[]", arr))) {
 					data = WJEChild(document, arr->name, WJE_GET);
 					if(!SchemaValidate(arr, data, err, loadcb, freecb, client,
-									   arr->name)) {
+									   arr->name, version)) {
 						fail = TRUE;
 						if(err) {
 							err(client, "%s failed validation", arr->name);
@@ -546,7 +619,8 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 								/* found a matching property */
 								if(!SchemaValidate(arr, data, err,
 												   loadcb, freecb,
-												   client, arr->name)) {
+												   client, arr->name,
+												   version)) {
 									fail = TRUE;
 									if(err) {
 										err(client, "%s failed validation",
@@ -587,7 +661,7 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 					while((data = WJEGet(document, "[]", data))) {
 						if(!WJEChild(sub, data->name, WJE_GET)) {
 							if(!SchemaValidate(memb, data, err, loadcb, freecb,
-											   client, data->name)) {
+											   client, data->name, version)) {
 								fail = TRUE;
 								if(err) {
 									err(client,
@@ -609,7 +683,7 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 					while((arr = WJEGet(document, "[]", arr))) {
 						MemAsprintf(&str, "%s[%d]", name, val);
 						if(!SchemaValidate(memb, arr, err, loadcb, freecb,
-										   client, str)) {
+										   client, str, version)) {
 							fail = TRUE;
 							if(err) {
 								err(client, "%s failed vaidation.", str);
@@ -632,7 +706,7 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 						}
 						MemAsprintf(&str, "%s[%d]", name, val);
 						if(!SchemaValidate(arr, data, err, loadcb, freecb,
-										   client, str)) {
+										   client, str, version)) {
 							fail = TRUE;
 							if(err) {
 								err(client, "%s failed tuple type vaidation.",
@@ -662,7 +736,7 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 					while((arr = WJEGet(document, "[]", arr))) {
 						MemAsprintf(&str, "%s[%d]", name, val);
 						if(!SchemaValidate(memb, arr, err, loadcb, freecb,
-										   client, str)) {
+										   client, str, version)) {
 							fail = TRUE;
 							if(err) {
 								err(client,
@@ -678,11 +752,32 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 			}
 			anyFail = anyFail || fail;
 
-		} else if(!stricmp(memb->name, "required") &&
-				  WJEBool(memb, NULL, WJE_GET, FALSE)) {
-			fail = (!document || document->type == WJR_TYPE_UNKNOWN);
-			if(fail && err) {
-				err(client, "required item '%s' not found.", name);
+		} else if(!stricmp(memb->name, "required")) {
+			/*
+			  https://tools.ietf.org/html/draft-zyp-json-schema-03#section-5.7
+			  http://json-schema.org/latest/json-schema-validation.html#anchor61
+			*/
+			if(version <= 3 && memb->type == WJR_TYPE_TRUE) {
+				/* draft 3;  "required": true */
+				fail = (!document || document->type == WJR_TYPE_UNKNOWN);
+				if(fail && err) {
+					err(client, "required item '%s' not found.", name);
+				}
+			} else if(version >= 4 && memb->type == WJR_TYPE_ARRAY) {
+				/* draft 4;  "required": [ "prop1", "prop2" ] */
+				arr = NULL;
+				while((arr = WJEGet(memb, "[]", arr))) {
+					MemAsprintf(&str, "[\"%s\"]",
+								WJEString(arr, NULL, WJE_GET, ""));
+					if(document && !WJEGet(document, str, NULL)) {
+						fail = TRUE;
+						if(fail && err) {
+							err(client, "%s: required member '%s' not found.",
+								name, str);
+						}
+					}
+					MemRelease(&str);
+				}
 			}
 			anyFail = anyFail || fail;
 
@@ -692,7 +787,7 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 				while((arr = WJEGet(memb, "[]", arr))) {
 					if(arr->type == WJR_TYPE_OBJECT) {
 						if(!SchemaValidate(arr, document, err, loadcb, freecb,
-										   client, name)) {
+										   client, name, version)) {
 							fail = TRUE;
 							if(err) {
 								err(client, "broken dependency schema: %s",
@@ -988,8 +1083,9 @@ static XplBool SchemaValidate(WJElement schema, WJElement document,
 	if(schema && !schemaGiven) {
 		if(freecb) {
 			freecb(schema, client);
+		} else {
+			WJECloseDocument(schema);
 		}
-		WJECloseDocument(schema);
 		schema = NULL;
 	}
 
@@ -1000,7 +1096,7 @@ EXPORT XplBool WJESchemaValidate(WJElement schema, WJElement document,
 								 WJEErrCB err, WJESchemaLoadCB loadcb,
 								 WJESchemaFreeCB freecb, void *client) {
 	return SchemaValidate(schema, document, err, loadcb, freecb, client,
-						  "(root)");
+						  "(root)", 0);
 }
 
 static XplBool ExtendsType(WJElement schema, const char *type,
@@ -1020,6 +1116,8 @@ static XplBool ExtendsType(WJElement schema, const char *type,
 
 			if (freecb) {
 				freecb(sub, client);
+			} else {
+				WJECloseDocument(sub);
 			}
 		}
 	} else {
@@ -1034,6 +1132,8 @@ static XplBool ExtendsType(WJElement schema, const char *type,
 
 				if (freecb) {
 					freecb(sub, client);
+				} else {
+					WJECloseDocument(sub);
 				}
 
 				if (match) {
@@ -1063,6 +1163,8 @@ EXPORT XplBool WJESchemaIsType(WJElement document, const char *type,
 
 		if (freecb) {
 			freecb(schema, client);
+		} else {
+			WJECloseDocument(schema);
 		}
 	}
 
@@ -1084,6 +1186,8 @@ EXPORT XplBool WJESchemaNameIsType(const char *describedby, const char *type,
 
 		if(freecb) {
 			freecb(schema, client);
+		} else {
+			WJECloseDocument(schema);
 		}
 	}
 
@@ -1131,6 +1235,8 @@ EXPORT char * WJESchemaNameFindBacklink(char *describedby, const char *format,
 
 	if (freecb) {
 		freecb(sub, client);
+	} else {
+		WJECloseDocument(sub);
 	}
 
 	return(result);

@@ -4,6 +4,8 @@
 
   after installing libwjelement (and running ldconfig if needed)...
   gcc -o validate -lwjelement -lwjreader validate.c
+    or
+  gcc -o validate `pkg-config --libs wjelement` validate.c
 */
 
 
@@ -46,6 +48,14 @@ static WJElement schema_load(const char *name, void *client,
 	}
 
 	return schema;
+}
+
+/*
+  callback: cleanup/free open schema
+*/
+static void schema_free(WJElement schema, void *client) {
+	WJECloseDocument(schema);
+	return;
 }
 
 /*
@@ -108,7 +118,7 @@ int main(int argc, char **argv) {
 	WJEDump(schema);
 	printf("schema: %s\n", readschema->depth ? "bad" : "good");
 
-	if(WJESchemaValidate(schema, json, schema_error, schema_load, NULL,
+	if(WJESchemaValidate(schema, json, schema_error, schema_load, schema_free,
 						 format)) {
 		printf("validation: PASS\n");
 	} else {

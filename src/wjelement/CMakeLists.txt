@@ -1,4 +1,4 @@
-add_library(wjelement SHARED
+add_library(wjelement
 	element.c
 	element.h
 	search.c
@@ -7,15 +7,10 @@ add_library(wjelement SHARED
 	hash.c
 )
 
-if (WINDOWS)
-	set(WIN_EXTRA_LIBS hulamemmgr)
-endif(WINDOWS)
-
 target_link_libraries(wjelement
-	${WIN_EXTRA_LIBS}
 	wjreader
 	wjwriter
-
+	xpl
 	${ALL_LIBS}
 )
 
@@ -27,7 +22,10 @@ SET_TARGET_PROPERTIES(
 	INSTALL_NAME_DIR "${LIB_DEST_DIR}"
 )
 
-install(TARGETS wjelement LIBRARY DESTINATION ${LIB_DEST_DIR})
+install(TARGETS wjelement
+	LIBRARY DESTINATION ${LIB_DEST_DIR}
+	ARCHIVE DESTINATION ${LIB_DEST_DIR}
+	)
 
 
 # unit tests
@@ -39,8 +37,7 @@ target_link_libraries(wjeunit
 	wjreader
 	wjwriter
 	wjelement
-#	hulamemmgr
-#	hulautil
+	xpl
 	${PTHREAD_LIBS}
 	${ALL_LIBS}
 )
@@ -62,3 +59,5 @@ add_test(WJElement:PutMultipleValues	${EXECUTABLE_OUTPUT_PATH}/wjeunit putvalues
 add_test(WJElement:Append				${EXECUTABLE_OUTPUT_PATH}/wjeunit append		)
 add_test(WJElement:Conditions			${EXECUTABLE_OUTPUT_PATH}/wjeunit conditions	)
 add_test(WJElement:Optionals			${EXECUTABLE_OUTPUT_PATH}/wjeunit optionals		)
+add_test(WJElement:Defaults				${EXECUTABLE_OUTPUT_PATH}/wjeunit defaults		)
+add_test(WJElement:FormatStr			${EXECUTABLE_OUTPUT_PATH}/wjeunit formatstr		)
